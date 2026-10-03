@@ -57,7 +57,7 @@ function checkWorkflow(name, doc) {
   if (hit.length && !doc.concurrency) {
     found.push({check: "no-concurrency-cancel", severity: "defect", file: name, triggers: hit,
       detail: "runs on " + hit.join("/") + " with no top-level concurrency group, so superseded " +
-              "commits keep running and paying"});
+              "commits keep running (and, on private repos or self-hosted runners, cost minutes)"});
   }
   Object.keys(jobs).forEach(function (jobName) {
     var job = jobs[jobName];
@@ -188,7 +188,7 @@ function unquoteDouble(s) {
 // A mapping-key line: {indent, key} or null. Handles plain, "double" and 'single' quoted keys.
 function parseKey(code) {
   var indent = /^ */.exec(code)[0].length;
-  var s = code.slice(indent).replace(/\s+$/, "");
+  var s = code.slice(indent).trimEnd();
   var m;
   if (s.charAt(0) === '"') {
     m = /^"((?:[^"\\]|\\.)*)"\s*:(?:\s|$)/.exec(s);
@@ -198,8 +198,27 @@ function parseKey(code) {
     m = /^'((?:[^']|'')*)'\s*:(?:\s|$)/.exec(s);
     return m ? {indent: indent, key: m[1].replace(/''/g, "'")} : null;
   }
-  m = /^([^\s#{}\[\],&*!|>%@`'"?-][^#]*?|-[^\s#][^#]*?)\s*:(?:\s|$)/.exec(s);
-  return m ? {indent: indent, key: m[1]} : null;
+  var key = plainKey(s);
+  return key === null ? null : {indent: indent, key: key};
+}
+
+// Plain (unquoted) key: the text before the first ":" that is followed by whitespace or the end of the line,
+// with no "#" before it. A linear scan: the equivalent regex backtracks quadratically on long runs of spaces.
+function plainKey(s) {
+  var c0 = s.charAt(0), first;
+  if (c0 === "-") {
+    if (s.length < 2 || /[\s#]/.test(s.charAt(1))) return null;
+    first = 2;
+  } else {
+    if (c0 === "" || /[\s#{}\[\],&*!|>%@`'"?]/.test(c0)) return null;
+    first = 1;
+  }
+  for (var i = first; i < s.length; i++) {
+    var c = s.charAt(i);
+    if (c === "#") return null;
+    if (c === ":" && (i + 1 === s.length || /\s/.test(s.charAt(i + 1)))) return s.slice(0, i).trimEnd();
+  }
+  return null;
 }
 
 // Split text into lines and mark which ones carry structure. Only the first YAML document is scanned.
@@ -222,7 +241,7 @@ function prepare(text) {
     if (indent === 0 && /^---(\s|$)/.test(line)) { if (started) { lines.pop(); break; } continue; }
     if (indent === 0 && /^\.\.\.(\s|$)/.test(line)) { if (started) { lines.pop(); break; } continue; }
     if (!started && indent === 0 && line.charAt(0) === "%") continue;
-    var code = stripComment(line).replace(/\s+$/, "");
+    var code = stripComment(line).trimEnd();
     if (!started) { started = true; topIndent = indent; }
     entry.code = code;
     entry.skip = false;
@@ -236,6 +255,13 @@ function prepare(text) {
     }
   }
   return {lines: lines, topIndent: topIndent};
+}
+
+// locate() runs once per finding on the same text; prepare it once.
+var prepared = {text: null, value: null};
+function preparedFor(text) {
+  if (prepared.text !== text) prepared = {text: text, value: prepare(text)};
+  return prepared.value;
 }
 
 function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
@@ -276,6 +302,34 @@ function stepRange(lines, i, lo, hi) {
   return [start, end];
 }
 
+// Whether the uses line at index i is a step's own `uses:` key. A block-style `uses:` key that is not in a
+// dash item directly under `steps:` (a strategy.matrix.include entry, a `with:` input) is not. Lines that
+// cannot be told apart this way (flow style) are kept, as before.
+function isStepUses(lines, i, lo) {
+  var cur = lines[i], dash = -1, j;
+  if (/^ *-\s/.test(cur.code)) {
+    dash = i;
+  } else {
+    var k = parseKey(cur.code);
+    if (!k || (k.key !== "uses")) return true;
+    for (j = i - 1; j >= lo; j--) {
+      if (lines[j].skip) continue;
+      if (lines[j].indent < cur.indent) { if (/^ *-\s/.test(lines[j].code)) dash = j; break; }
+    }
+    if (dash < 0) return false;
+  }
+  var dashIndent = lines[dash].indent;
+  for (j = dash - 1; j >= lo; j--) {
+    var l = lines[j];
+    if (l.skip) continue;
+    if (l.indent < dashIndent || (l.indent === dashIndent && !/^ *-\s/.test(l.code))) {
+      var pk = parseKey(l.code);
+      return pk ? pk.key === "steps" : true;
+    }
+  }
+  return true;
+}
+
 // occurrence (optional, 0-based): which of several identical findings in one file this is, so that two
 // `actions/checkout` steps in a job that both clone full history point at their own lines.
 function locate(text, finding, occurrence) {
@@ -288,7 +342,7 @@ function locate(text, finding, occurrence) {
 
 function locateInner(text, finding, occ) {
   if (!finding || typeof finding !== "object") return 1;
-  var P = prepare(text), lines = P.lines, top = P.topIndent, i;
+  var P = preparedFor(text), lines = P.lines, top = P.topIndent, i;
 
   if (finding.check === "no-concurrency-cancel") {
     for (i = 0; i < lines.length; i++) {
@@ -357,7 +411,14 @@ function locateInner(text, finding, occ) {
     if (lines[i].skip) continue;
     var v = usesValue(lines[i].code);
     if (v === null) continue;
-    if (wantFull !== null ? v === wantFull : v.split("@")[0] === wantAction) cands.push(i);
+    if (!(wantFull !== null ? v === wantFull : v.split("@")[0] === wantAction)) continue;
+    if (!isStepUses(lines, i, start)) continue;
+    // deviation (b): setup-go v4+ is never flagged, so it cannot be the step a cache finding is about
+    if (finding.check === "setup-without-cache" && wantAction === "actions/setup-go" && v.indexOf("@") >= 0) {
+      var major = refMajor(v.slice(v.indexOf("@") + 1));
+      if (major !== null && major >= 4) continue;
+    }
+    cands.push(i);
   }
   if (!cands.length) return lines[start].n;
   var pool = cands;
@@ -371,7 +432,7 @@ function locateInner(text, finding, occ) {
       });
     } else if (finding.check === "setup-without-cache" && finding.cache_key) {
       var cre = new RegExp("(?:^|[\\s{,])(?:\"" + escapeRe(finding.cache_key) + "\"|'" + escapeRe(finding.cache_key) +
-                           "'|" + escapeRe(finding.cache_key) + ")\\s*:\\s*(?!''|\"\"|null\\b|~)[^\\s,}]");
+                           "'|" + escapeRe(finding.cache_key) + ")\\s*:\\s*(?!''|\"\"|null\\b|~|0+(?=\\s|,|}|$))[^\\s,}]");
       chosen = cands.filter(function (c) {
         var r = stepRange(lines, c, start, end);
         return !lines.slice(r[0], r[1]).some(function (l) { return !l.skip && cre.test(l.code); });

@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: weioai/ci-speed-check@v1
 ```
 
@@ -33,7 +33,7 @@ This example passes its own slowness and hygiene checks. Like any third-party ac
 ## What you get
 
 - Annotations on the workflow file at the line that needs changing (defects as warnings, observations as notices; GitHub shows at most 10 of each per step, the summary lists all).
-- A job summary: a findings table (file, job, check, class, detail), one fix snippet per kind of finding, and what this check cannot see.
+- A job summary: a findings table (file, job, check, class, detail), one fix snippet per kind of finding, and what this check cannot see. Without an `api-key`, it ends with one line about the optional paid Pro report.
 - A JSON report written to `RUNNER_TEMP`, for your own tooling or an upload step.
 - Step outputs: `findings`, `defects`, `pro`, `report`.
 
@@ -66,14 +66,14 @@ Five deterministic rules, the same engine as Weio's [free web check](https://aut
 | Check | Class | Severity | What it flags | Fix |
 | --- | --- | --- | --- | --- |
 | `no-concurrency-cancel` | slowness | defect | A workflow triggered by `push` or `pull_request` with no top-level `concurrency` group, so runs for superseded commits keep running. | Add a concurrency group with `cancel-in-progress: true`. |
-| `setup-without-cache` | slowness | defect | `actions/setup-node`, `setup-python`, `setup-java`, `setup-go`, `setup-dotnet` or `ruby/setup-ruby` without their cache input, so dependencies are downloaded every run. | Set `cache:` (`bundler-cache:` for Ruby). |
+| `setup-without-cache` | slowness | defect | `actions/setup-node`, `setup-python`, `setup-java`, `setup-go`, `setup-dotnet` or `ruby/setup-ruby` without their cache input, so dependencies are downloaded every run. | Set `cache:` (`bundler-cache:` for Ruby). The setup step fails unless the lock or dependency file is where the setup action expects it: `packages.lock.json` for setup-dotnet; a lock file for npm, yarn and pnpm; `requirements.txt` or similar for pip; `go.sum` at the repository root (or set `cache-dependency-path`) for setup-go v3. |
 | `full-history-checkout` | slowness | observation | `actions/checkout` with `fetch-depth: 0`. Reported, not condemned: release tooling often needs full history. | Use `fetch-depth: 1` unless something reads git history. |
 | `no-job-timeout` | hygiene | defect | A job with no `timeout-minutes` (jobs that call a reusable workflow are skipped). A hang costs the 360-minute default. | Add `timeout-minutes`. |
 | `unpinned-third-party-action` | security | defect | A step using a non-`actions/` action at a tag or branch instead of a full 40-character commit SHA. | Pin to the commit SHA and keep the tag in a comment. |
 
 The class tells you why it matters: slowness findings explain slow pipelines, hygiene and security findings are real but are not why a pipeline is slow.
 
-The fixes, as the action prints them:
+The fixes, in short:
 
 ```yaml
 # no-concurrency-cancel
@@ -151,7 +151,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: weioai/ci-speed-check@v1
         with:
           api-key: ${{ secrets.WEIO_API_KEY }}
@@ -174,11 +174,13 @@ One Pro run uses one credit, so run it on a schedule or by hand rather than on e
 
 ## Compatibility
 
-Zero runtime dependencies: js-yaml 4.1.0 is vendored under `src/vendor` (MIT license included) and the rest is plain CommonJS written for Node 18 and later. Tests: `npm test`.
+Requirements: a runner that supports node24 (GHES users on old runners may need to upgrade).
+
+Zero runtime dependencies: js-yaml 4.1.1 is vendored under `src/vendor` (MIT license included) and the rest is plain CommonJS written for Node 18 and later. Tests: `npm test`.
 
 ## About
 
-Made by Weio, Inc., a small California company where AI operators do most of the work and a human owner is accountable for it. This action, its tests and this page were written by AI operators at Weio.
+Made by Weio, Inc., a small California-based company where AI operators do most of the work and a human owner is accountable for it. This action, its tests and this page were written by AI operators at Weio.
 
 Questions, bugs and rule suggestions: open an issue on this repository. Sales and keys: sales@weio.ai.
 

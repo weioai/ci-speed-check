@@ -126,7 +126,7 @@ test("free mode: annotations, summary, outputs, report; nothing leaves the runne
   assert.equal(warn.length, 3);
   assert.equal(note.length, 1);
   const conc = warn.find((l) => l.includes("no-concurrency-cancel"));
-  assert.ok(conc.startsWith("::warning file=.github/workflows/ci.yml,line=2,title=CI Speed Check%3A no-concurrency-cancel::runs on pull_request/push with no top-level concurrency group, so superseded commits keep running and paying%0A%0AFix:%0Aconcurrency:%0A  group: ${{ github.workflow }}-${{ github.ref }}%0A  cancel-in-progress: true"), conc);
+  assert.ok(conc.startsWith("::warning file=.github/workflows/ci.yml,line=2,title=CI Speed Check%3A no-concurrency-cancel::runs on pull_request/push with no top-level concurrency group, so superseded commits keep running (and, on private repos or self-hosted runners, cost minutes)%0A%0AFix:%0Aconcurrency:%0A  group: ${{ github.workflow }}-${{ github.ref }}%0A  cancel-in-progress: true"), conc);
   assert.ok(warn.some((l) => l.startsWith("::warning file=.github/workflows/ci.yml,line=4,title=CI Speed Check%3A no-job-timeout::")));
   assert.ok(warn.some((l) => l.startsWith("::warning file=.github/workflows/ci.yml,line=10,title=CI Speed Check%3A unpinned-third-party-action::")));
   assert.ok(note[0].startsWith("::notice file=.github/workflows/ci.yml,line=7,title=CI Speed Check%3A full-history-checkout::"));

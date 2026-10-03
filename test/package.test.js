@@ -17,7 +17,7 @@ test("action.yml: metadata, branding, runtime", () => {
   assert.ok(action.description.length > 20 && action.description.length <= 120, "description length " + action.description.length);
   assert.equal(action.author, "Weio, Inc.");
   assert.deepEqual(action.branding, {icon: "zap", color: "green"});
-  assert.deepEqual(action.runs, {using: "node20", main: "src/index.js"});
+  assert.deepEqual(action.runs, {using: "node24", main: "src/index.js"});
   assert.ok(fs.existsSync(path.join(ROOT, action.runs.main)));
 });
 
@@ -51,7 +51,7 @@ test("package.json", () => {
   assert.equal(pkg.name, "ci-speed-check");
   assert.equal(pkg.version, "1.0.0");
   assert.equal(pkg.private, true);
-  assert.equal(pkg.scripts.test, "node --test test/");
+  assert.equal(pkg.scripts.test, "node --test test/*.test.js");
   assert.equal(pkg.engines.node, ">=18");
   assert.ok(!pkg.dependencies && !pkg.devDependencies && !pkg.optionalDependencies && !pkg.peerDependencies);
 });
@@ -62,12 +62,17 @@ test("LICENSE files", () => {
   assert.match(read("src/vendor/LICENSE-js-yaml"), /The MIT License/);
 });
 
-test("vendored js-yaml keeps its license header and matches the supplied copy", () => {
+test("vendored js-yaml is 4.1.1 (or later) and keeps its license header", () => {
   const vendored = fs.readFileSync(path.join(ROOT, "src/vendor/js-yaml.min.js"));
-  assert.ok(vendored.toString("utf8", 0, 80).startsWith("/*! js-yaml 4.1.0 https://github.com/nodeca/js-yaml @license MIT */"));
-  const supplied = path.join(ROOT, "..", "src", "js-yaml.min.js");
-  if (fs.existsSync(supplied)) assert.ok(vendored.equals(fs.readFileSync(supplied)), "byte copy of the supplied js-yaml");
+  assert.ok(vendored.toString("utf8", 0, 80).startsWith("/*! js-yaml 4.1.1 https://github.com/nodeca/js-yaml @license MIT */"));
   assert.equal(typeof yaml.loadAll, "function");
+});
+
+test("vendored js-yaml: a merge key cannot replace the prototype of the merged object (CVE-2025-64718)", () => {
+  const doc = yaml.load("base: &b\n  __proto__:\n    polluted: yes\nobj:\n  <<: *b\n  own: 1\n");
+  assert.equal(Object.getPrototypeOf(doc.obj), Object.prototype);
+  assert.equal(doc.obj.polluted, undefined);
+  assert.equal({}.polluted, undefined);
 });
 
 test("the reference engine is a byte copy of the supplied ci_check.js", () => {
@@ -110,7 +115,7 @@ test("README quick start passes our own slowness and hygiene checks; only the ac
   assert.deepEqual(doc.permissions, {contents: "read"});
   assert.ok(doc.concurrency);
   const steps = doc.jobs["ci-speed-check"].steps;
-  assert.equal(steps[0].uses, "actions/checkout@v4");
+  assert.equal(steps[0].uses, "actions/checkout@v5");
   assert.equal(steps[1].uses, "weioai/ci-speed-check@v1");
   assert.equal(doc.jobs["ci-speed-check"]["timeout-minutes"], 5);
   const found = rules.checkWorkflow("quickstart.yml", doc);
@@ -136,11 +141,21 @@ test("README states the Pro facts exactly and makes no savings claims", () => {
   assert.ok(readme.includes("One Pro run = one credit."));
   assert.ok(readme.includes("https://weio.ai/services/site-check-api.html"));
   assert.ok(readme.includes("sales@weio.ai"));
-  assert.ok(readme.includes("a small California company where AI operators do most of the work and a human owner is accountable"));
+  assert.ok(readme.includes("a small California-based company where AI operators do most of the work and a human owner is accountable"));
   // the only dollar amount on the page is the key price
   assert.deepEqual(readme.match(/\$\d[\d,.]*/g), ["$9"]);
   assert.ok(!/!\[|shields\.io|badge|testimonial|stars?\b|% faster|save[sd]? \d/i.test(readme));
   assert.ok(!/—/.test(readme), "no em dashes");
+});
+
+test("README states the node24 runner requirement, the paid-report summary line and the setup-without-cache prerequisites", () => {
+  assert.ok(readme.includes("a runner that supports node24 (GHES users on old runners may need to upgrade)"));
+  assert.ok(readme.includes("The fixes, in short:"));
+  assert.ok(readme.includes("it ends with one line about the optional paid Pro report"));
+  assert.ok(readme.includes("`packages.lock.json` for setup-dotnet"));
+  assert.ok(readme.includes("`go.sum` at the repository root"));
+  assert.ok(!readme.includes("actions/checkout@v4"));
+  assert.ok(/optional paid run-history report/i.test(action.description));
 });
 
 test("README privacy section matches what the code does", () => {

@@ -264,7 +264,76 @@ test("a job list longer than one page is read in full", async () => {
   const r = await history.analyze(base({fetchImpl: h.fetchImpl}));
   assert.equal(r.totals.runnerMinutes, 130 * 2);
   assert.equal(h.log.filter((x) => x === "jobs:900").length, 2);
-  assert.ok(h.calls.some((c) => /jobs\?per_page=100&page=2$/.test(c.url)));
+  assert.ok(h.calls.some((c) => /jobs\?per_page=100&filter=all&page=2$/.test(c.url)));
+});
+
+/* Two attempts. Run 700 failed on attempt 1 and again on attempt 2 (run_started_at is the start of the latest attempt).
+ *   attempt 1: build 10:00:30-10:10:30 (600 s -> 10 min, queued 30 s), step "Run tests" 480 s
+ *   attempt 2: build 10:21:00-10:25:00 (240 s -> 4 min, queued 60 s), step "Run tests" 120 s
+ *  Run 701 (same workflow, branch and event) started 10:22:00: build 10:22:10-10:30:00 (470 s -> 8 min, queued 10 s).
+ *  Runner minutes count every attempt: 10 + 4 + 8 = 22. Failure minutes for run 700: 14.
+ *  Run 700 ends with its latest attempt at 10:25:00, after 701 started, so it is superseded; its waste is the latest
+ *  attempt's build after 10:22:00 = 180 s -> 3 min. Wall clock: 700 = 300 s, 701 = 480 s -> 13 min.
+ */
+function rerunScenario(extraAttempt1) {
+  const a1 = M.job(7001, "build", "10:00:00", "10:00:30", "10:10:30", Object.assign({conclusion: "failure", run_attempt: 1,
+    steps: [M.step("Run tests", "10:01:00", "10:09:00")]}, extraAttempt1 || {}));
+  const a2 = M.job(7002, "build", "10:20:00", "10:21:00", "10:25:00", {conclusion: "failure", run_attempt: 2,
+    steps: [M.step("Run tests", "10:22:00", "10:24:00")]});
+  const n = M.job(7011, "build", "10:22:00", "10:22:10", "10:30:00", {run_attempt: 1});
+  return {
+    runs: [M.run(700, "10:20:00", "10:25:00", {run_attempt: 2, conclusion: "failure"}), M.run(701, "10:22:00", "10:30:00")],
+    jobs: {700: [a1, a2], 701: [n]}
+  };
+}
+
+test("jobs are requested with filter=all so earlier attempts of re-run workflows are returned", async () => {
+  const h = harness(rerunScenario());
+  await history.analyze(base({fetchImpl: h.fetchImpl}));
+  const jobCalls = h.calls.filter((c) => /\/jobs\?/.test(c.url));
+  assert.equal(jobCalls.length, 2);
+  for (const c of jobCalls) {
+    const u = new URL(c.url);
+    assert.equal(u.searchParams.get("filter"), "all", c.url);
+    assert.equal(u.searchParams.get("per_page"), "100", c.url);
+  }
+});
+
+test("re-runs: minutes, jobs, steps, queue and failures count every attempt; waste uses the latest attempt", async () => {
+  const r = await history.analyze(base({fetchImpl: harness(rerunScenario()).fetchImpl}));
+  assert.deepEqual(r.totals, {runs: 2, completed: 2, runnerMinutes: 22, wallClockMinutes: 13});
+  assert.deepEqual(r.slowestJobs, [{workflow: "CI", job: "build", runs: 3, medianSeconds: 470, p90Seconds: 600, totalMinutes: 22}]);
+  assert.deepEqual(r.slowestSteps, [{workflow: "CI", job: "build", step: "Run tests", runs: 2, totalSeconds: 600, totalMinutes: 10, meanSeconds: 300}]);
+  assert.deepEqual(r.queue, [{labels: "ubuntu-latest", jobs: 3, medianSeconds: 30, p90Seconds: 60, flagged: false}]);
+  assert.equal(r.failures.failedRuns, 1);
+  assert.equal(r.failures.failedMinutes, 14);
+  assert.equal(r.failures.rerunRuns, 1);
+  assert.equal(r.superseded.runs, 1);
+  assert.equal(r.superseded.wasteMinutes, 3);
+  assert.deepEqual(r.superseded.byWorkflow, [{workflow: "CI", runs: 2, supersededRuns: 1, wasteMinutes: 3}]);
+});
+
+test("re-runs: only the latest attempt decides the run's end time and superseded waste", async () => {
+  // An earlier attempt whose job ends long after the latest attempt must not stretch the run or add waste.
+  const r = await history.analyze(base({fetchImpl: harness(rerunScenario({completed_at: M.at("10:40:00")})).fetchImpl}));
+  assert.equal(r.totals.wallClockMinutes, 13);
+  assert.equal(r.superseded.runs, 1);
+  assert.equal(r.superseded.wasteMinutes, 3);
+  // ... but its minutes still count: 10:00:30-10:40:00 = 2370 s -> 40, plus 4 and 8
+  assert.equal(r.totals.runnerMinutes, 52);
+});
+
+test("re-runs: the method notes say earlier attempts are included", async () => {
+  const r = await history.analyze(base({fetchImpl: harness(rerunScenario()).fetchImpl}));
+  assert.ok(r.method.some((m) => /Earlier attempts of re-run workflows are included/.test(m)));
+  assert.match(history.renderMarkdown(r), /Earlier attempts of re-run workflows are included/);
+});
+
+test("markdown: the superseded headline says 'at most' what cancel-in-progress would have cancelled", async () => {
+  const r = await history.analyze(base({fetchImpl: harness(M.scenario()).fetchImpl}));
+  const md = history.renderMarkdown(r);
+  assert.ok(md.includes(", at most what a `cancel-in-progress` concurrency group would have cancelled (pipelines that must finish every push would cancel less)."), md);
+  assert.ok(!md.includes("which is what a `cancel-in-progress`"));
 });
 
 test("fork branches with the same name are not treated as one group", async () => {
@@ -401,6 +470,37 @@ test("mdEscape: pipes, backticks and backslashes are escaped; newlines, angle br
   assert.equal(history.mdEscape(null), "");
   assert.equal(history.mdEscape(undefined), "");
   assert.equal(history.mdEscape(42), "42");
+});
+
+test("mdEscape: emphasis characters are escaped", () => {
+  assert.equal(history.mdEscape("*bold* _it_ ~~gone~~"), "\\*bold\\* \\_it\\_ \\~\\~gone\\~\\~");
+});
+
+test("mdEscape: autolink triggers are broken so report data cannot become a link", () => {
+  const out = history.mdEscape("see https://evil.example and www.evil.example");
+  assert.ok(!out.includes("://"), out);
+  assert.ok(!out.includes("www."), out);
+  assert.ok(out.includes(":\u200b//evil.example"), out);
+  assert.ok(out.includes("www\u200b.evil.example"), out);
+  // every form: start of string, after punctuation, upper case, several URLs
+  for (const raw of ["www.a.test", "(www.a.test)", "WWW.a.test", "x\"www.a.test", "ftp://a.test http://b.test"]) {
+    const e = history.mdEscape(raw);
+    assert.ok(!/:\/\//.test(e) && !/www\./i.test(e), raw + " -> " + e);
+  }
+  // not a trigger: "www" inside a word stays as is
+  assert.equal(history.mdEscape("awww.x"), "awww.x");
+  // the visible text is otherwise unchanged
+  assert.equal(history.mdEscape("see https://evil.example").replace(/\u200b/g, ""), "see https://evil.example");
+});
+
+test("markdown: URLs in GitHub-derived names do not survive as autolinks", async () => {
+  const name = "deploy https://evil.example www.evil.example";
+  const runs = [M.run(1, "10:00:00", "10:05:00", {name, workflow_id: 9, head_branch: "main", conclusion: "failure"})];
+  const jobs = {1: [M.job(11, name, "10:00:00", "10:00:10", "10:05:00", {steps: [M.step(name, "10:00:20", "10:04:00")]})]};
+  const md = history.renderMarkdown(await history.analyze(base({fetchImpl: harness({runs, jobs}).fetchImpl})));
+  assert.ok(md.includes("evil.example"));
+  assert.ok(!md.includes("://"), "no unbroken scheme separator anywhere in the report");
+  assert.ok(!/www\./i.test(md));
 });
 
 test("fmtDur", () => {

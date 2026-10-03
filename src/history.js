@@ -69,14 +69,18 @@ function getHeader(res, name) {
 }
 
 // Strings from GitHub (workflow, job, step and branch names) go into markdown tables. Strip newlines and
-// angle brackets, escape the characters that change meaning in a table cell.
+// angle brackets, escape the characters that change meaning in a table cell or start emphasis, and break the
+// "://" and "www." triggers of GFM and markdown-it autolinks (with a zero-width space) so report data cannot
+// become a link.
 function mdEscape(s) {
   return String(s === undefined || s === null ? "" : s)
     .replace(/[\r\n\u2028\u2029]+/g, " ")
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
     .replace(/[<>]/g, "")
     .replace(/\\/g, "\\\\")
-    .replace(/[|`\[\]]/g, "\\$&");
+    .replace(/[|`\[\]*_~]/g, "\\$&")
+    .replace(/:\/\//g, ":\u200b//")
+    .replace(/(^|\W)(www)\./gi, "$1$2\u200b.");
 }
 
 function fmtDur(sec) {
@@ -193,7 +197,7 @@ async function analyze(opts) {
   async function readJobs(run) {
     var all = [], p = 1;
     while (p <= MAX_JOB_PAGES) {
-      var u = apiBase + "/repos/" + owner + "/" + repo + "/actions/runs/" + run.id + "/jobs?per_page=100" + (p > 1 ? "&page=" + p : "");
+      var u = apiBase + "/repos/" + owner + "/" + repo + "/actions/runs/" + run.id + "/jobs?per_page=100&filter=all" + (p > 1 ? "&page=" + p : "");
       var jr = await get(u);
       if (!jr.ok) return {error: jr};
       var js = jr.body && Array.isArray(jr.body.jobs) ? jr.body.jobs : [];
@@ -257,7 +261,8 @@ function normJob(j) {
   });
   return {
     name: str(j && j.name, "(unnamed job)"), labels: labels, createdMs: c, startMs: s, endMs: e,
-    durMs: durMs, skipped: skipped, minutes: skipped ? 0 : ceilMin(durMs), steps: steps
+    durMs: durMs, skipped: skipped, minutes: skipped ? 0 : ceilMin(durMs), steps: steps,
+    attempt: Math.max(1, toInt(j && j.run_attempt, 1))
   };
 }
 
@@ -270,14 +275,18 @@ function buildReport(c) {
     var jobs = (c.jobsByRun[r.id] || []).map(normJob);
     var startMs = tsMs(r.run_started_at);
     if (!fin(startMs)) startMs = tsMs(r.created_at);
-    var jobEnds = jobs.filter(function (j) { return !j.skipped && fin(j.endMs); }).map(function (j) { return j.endMs; });
+    // Jobs are read with filter=all, so they cover every attempt. Totals count all of them; the run's end
+    // time and its superseded-run waste use only the latest attempt (the highest run_attempt among its jobs).
+    var latest = jobs.reduce(function (a, j) { return Math.max(a, j.attempt); }, 1);
+    var latestJobs = jobs.filter(function (j) { return j.attempt === latest; });
+    var jobEnds = latestJobs.filter(function (j) { return !j.skipped && fin(j.endMs); }).map(function (j) { return j.endMs; });
     var endMs = jobEnds.length ? Math.max.apply(null, jobEnds) : tsMs(r.updated_at);
     var completed = r.status === "completed";
     return {
       run: r, id: r.id, wfId: wfId, wf: nm, event: r.event, branch: r.head_branch,
       fork: r.head_repository && r.head_repository.id !== undefined ? String(r.head_repository.id) : "",
       completed: completed, conclusion: r.conclusion, attempt: toInt(r.run_attempt, 1),
-      startMs: startMs, endMs: endMs, jobs: jobs, hasJobs: !!c.jobsByRun[r.id],
+      startMs: startMs, endMs: endMs, jobs: jobs, latestJobs: latestJobs, hasJobs: !!c.jobsByRun[r.id],
       minutes: jobs.reduce(function (a, j) { return a + j.minutes; }, 0)
     };
   });
@@ -310,7 +319,7 @@ function buildReport(c) {
       if (R.conclusion === "cancelled") { cancelledSuperseded++; continue; }
       if (!R.hasJobs) continue;   // no job data (partial read): cannot measure its waste
       var waste = 0;
-      R.jobs.forEach(function (j) {
+      R.latestJobs.forEach(function (j) {
         if (j.skipped || !fin(j.startMs) || !fin(j.endMs)) return;
         waste += ceilMin(j.endMs - Math.max(j.startMs, N.startMs));
       });
@@ -409,6 +418,8 @@ function buildReport(c) {
       "branch and event (push or pull_request) started before it finished. Its waste is the runner time of its " +
       "jobs after that newer run started, each job rounded up to a whole minute. It is an upper bound on what a " +
       "cancel-in-progress concurrency group would have cancelled, since some pipelines intend every push to finish.",
+    "Earlier attempts of re-run workflows are included in runner minutes, job, step, queue and failure figures. " +
+      "A run's end time and its superseded waste use only its latest attempt.",
     "Medians and p90 use job and step timestamps from GitHub (p90 is nearest rank). Queue time is a job's " +
       "created_at to started_at. Jobs GitHub skipped are left out of job, step and queue figures.",
     "Failures are runs that ended in failure, timed_out or startup_failure. Wall-clock minutes run from a run's " +
@@ -485,7 +496,8 @@ function renderMarkdown(report) {
     out.push(plural(s.runs, "run was", "runs were") + " still running after a newer run of the same workflow, branch and " +
              "event had started. Their jobs spent **" + s.wasteMinutes + " runner minutes** after that point" +
              (t.runnerMinutes ? " (" + s.wastePercentOfRunnerMinutes + "% of the runner minutes in this sample)" : "") +
-             ", which is what a `cancel-in-progress` concurrency group would have cancelled.");
+             ", at most what a `cancel-in-progress` concurrency group would have cancelled " +
+             "(pipelines that must finish every push would cancel less).");
     out.push("");
     out.push(table(["Workflow", "Runs in sample", "Superseded runs", "Runner minutes after newer run started"],
       s.byWorkflow.map(function (b) { return [E(b.workflow), String(b.runs), String(b.supersededRuns), String(b.wasteMinutes)]; })));

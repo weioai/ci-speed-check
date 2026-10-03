@@ -267,3 +267,61 @@ test("identical findings are told apart with the occurrence argument", () => {
   assert.equal(rules.locate(text, by("full-history-checkout")[0], 9), 6);
   assert.equal(rules.locate(text, by("full-history-checkout")[0], -1), 6);
 });
+
+test("review fixes: long runs of spaces are linear (no regex backtracking)", () => {
+  const pad = " ".repeat(200000);
+  const text = join(["on: push", "jobs:", "  build" + pad + "x:", "    runs-on: x" + pad + "y" + pad, "    steps:",
+                     "      - uses: actions/checkout@v4", "        name: x" + pad + "z" + pad]);
+  const t0 = Date.now();
+  const all = findings(text);
+  all.forEach((f, i) => rules.locate(text, f, i));
+  assert.ok(Date.now() - t0 < 2000, "took " + (Date.now() - t0) + " ms");
+  assert.equal(lineOf(text, "no-job-timeout"), 3);
+});
+
+test("review fixes: a uses: key that is not a step (matrix include, with input) is not taken as the step", () => {
+  const text = join([
+    "on: push",                                  // 1
+    "jobs:",                                     // 2
+    "  build:",                                  // 3
+    "    timeout-minutes: 5",                    // 4
+    "    strategy:",                             // 5
+    "      matrix:",                             // 6
+    "        include:",                          // 7
+    "          - uses: actions/setup-node@v4",   // 8
+    "    steps:",                                // 9
+    "      - name: x",                           // 10
+    "        with:",                             // 11
+    "          uses: actions/setup-node@v4",     // 12
+    "        run: echo",                         // 13
+    "      - uses: actions/setup-node@v4"        // 14
+  ]);
+  assert.equal(lineOf(text, "setup-without-cache"), 14);
+});
+
+test("review fixes: setup-go v4+ (never flagged) and cache: 0 (flagged) pick the right step", () => {
+  const text = join([
+    "on: push",                                  // 1
+    "jobs:",                                     // 2
+    "  build:",                                  // 3
+    "    timeout-minutes: 5",                    // 4
+    "    steps:",                                // 5
+    "      - uses: actions/setup-go@v5",         // 6
+    "      - uses: actions/setup-go@v3",         // 7
+    "        with:",                             // 8
+    "          cache: true",                     // 9
+    "      - uses: actions/setup-go@v3",         // 10
+    "        with:",                             // 11
+    "          cache: 0"                         // 12
+  ]);
+  const hits = find(text, "setup-without-cache");
+  assert.equal(hits.length, 1);
+  assert.equal(rules.locate(text, hits[0]), 10);
+});
+
+test("review fixes: plain keys parse as before", () => {
+  const text = join(["on: push", "jobs:", "  a-b c:   ", "    steps: []", "  'q': {}", "  -x: {}", "  k:v: {}"]);
+  const jobs = Object.keys(yaml.load(text).jobs);
+  assert.deepEqual(jobs, ["a-b c", "q", "-x", "k:v"]);
+  assert.deepEqual(jobs.map((j) => rules.locate(text, {check: "no-job-timeout", job: j})), [3, 5, 6, 7]);
+});

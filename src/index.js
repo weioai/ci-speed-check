@@ -24,6 +24,7 @@ var DEFAULT_GITHUB_API = "https://api.github.com";
 var KEY_RE = /^wk_[A-Za-z0-9_-]{24,64}$/;
 var CREDIT_TIMEOUT_MS = 15000;
 var MAX_FILES = 500;
+var MAX_FINDINGS_PER_FILE = 1000;  // YAML aliases can multiply findings
 var MAX_FILE_BYTES = 1024 * 1024;
 var MAX_ANNOTATIONS = 10;          // GitHub shows at most 10 warnings and 10 notices per step
 var MAX_TABLE_ROWS = 200;
@@ -259,14 +260,15 @@ async function runPro(ctx) {
         try {
           r = await creditPost(fetchImpl, weioBase, apiKey, slug);
         } catch (e) {
-          throw ProSkip("could not reach Weio to use a credit (" + (e && e.name === "AbortError" ? "no answer within 15 s" : "network error") + ")." + buy, false);
+          throw ProSkip("could not reach Weio to use a credit (" + (e && e.name === "AbortError" ? "no answer within 15 s" : "network error") + "). Weio did not confirm the credit; if one was used, it shows in your remaining balance." + buy, false);
         }
         var b = r.body && typeof r.body === "object" ? r.body : {};
-        if (r.status === 200 && b.ok !== false) {
+        if (r.status === 200 && b.ok === true) {
           creditUsed = true;
           if (typeof b.credits_remaining === "number" && isFinite(b.credits_remaining)) creditsRemaining = b.credits_remaining;
           return;
         }
+        if (r.status === 200 && b.ok !== false) throw ProSkip("unexpected answer from Weio (HTTP 200 without a confirmed credit)." + buy, false);
         var text = cleanText(typeof b.error === "string" && b.error ? b.error : "HTTP " + r.status, 200);
         var tail = r.status === 429 || r.status >= 500 ? " Try again later." : "";
         throw ProSkip("Weio said: " + text + " (HTTP " + r.status + ")." + tail + buy, false);
@@ -316,12 +318,22 @@ async function main(env) {
   } else {
     try {
       var st = fs.lstatSync(root);
-      if (st.isSymbolicLink()) {
+      var realRoot = fs.realpathSync(root), realWs = fs.realpathSync(workspace);
+      var realRel = path.relative(realWs, realRoot);
+      if (realRel.startsWith("..") || path.isAbsolute(realRel)) {
+        model.problem = "path must be inside the workspace, so nothing was read.";
+        warning("path resolves outside the workspace through a symbolic link: " + cleanText(inputPath, 120) + "; nothing was checked.");
+      } else if (st.isSymbolicLink()) {
         warning("path is a symbolic link, which is not followed: " + cleanText(inputPath, 120));
       } else if (st.isFile()) {
         files = [root];
       } else if (st.isDirectory()) {
-        files = collectFiles(root);
+        files = collectFiles(root).filter(function (f) {
+          try {
+            var r = path.relative(realRoot, fs.realpathSync(f));
+            return !r.startsWith("..") && !path.isAbsolute(r);
+          } catch (e) { return false; }
+        });
       }
     } catch (e) {
       warning("path not found: " + cleanText(inputPath, 120) + ". Run actions/checkout first, or set path.");
@@ -351,6 +363,10 @@ async function main(env) {
       }
       model.files.push(rel);
       var found = rules.checkWorkflow(rel, docs[0]);
+      if (found.length > MAX_FINDINGS_PER_FILE) {
+        warning("only the first " + MAX_FINDINGS_PER_FILE + " of " + found.length + " findings in this file are reported", props);
+        found = found.slice(0, MAX_FINDINGS_PER_FILE);
+      }
       var seen = Object.create(null);
       found.forEach(function (f) {
         // identical findings (two full-history checkouts in one job) each get their own step's line

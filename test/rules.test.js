@@ -7,6 +7,14 @@ const yaml = require("../src/vendor/js-yaml.min.js");
 const rules = require("../src/rules");
 const reference = require("./reference/ci_check.js");
 
+// One wording change from the engine (not a result change): public repos on GitHub-hosted runners do not pay.
+function refWording(found) {
+  return found.map((f) => f.detail && f.detail.endsWith("commits keep running and paying")
+    ? Object.assign({}, f, {detail: f.detail.replace("commits keep running and paying",
+        "commits keep running (and, on private repos or self-hosted runners, cost minutes)")})
+    : f);
+}
+
 const FIXTURES = path.join(__dirname, "fixtures");
 const fixtureNames = fs.readdirSync(FIXTURES).filter((f) => /\.ya?ml$/.test(f)).sort();
 const read = (name) => fs.readFileSync(path.join(FIXTURES, name), "utf8");
@@ -86,7 +94,7 @@ for (const name of fixtureNames) {
   test("fixture " + name + ": parity with the reference engine", () => {
     const doc = docOf(read(name));
     const mine = rules.checkWorkflow(name, doc);
-    const ref = reference.checkWorkflow(name, doc);
+    const ref = refWording(reference.checkWorkflow(name, doc));
     if (!DEVIATING.has(name)) {
       assert.deepEqual(mine, ref);
     } else {
@@ -104,7 +112,7 @@ test("on: [push], on: push, quoted on, and the true-key fallback give the docume
   assert.deepEqual(trig("flow-style.yml"), ["pull_request", "push"]);
   // an object built the way PyYAML would build it: boolean true key, which JS stringifies to "true"
   const doc = {true: {push: null}, jobs: {}};
-  assert.deepEqual(rules.checkWorkflow("x", doc), reference.checkWorkflow("x", doc));
+  assert.deepEqual(rules.checkWorkflow("x", doc), refWording(reference.checkWorkflow("x", doc)));
   assert.equal(rules.checkWorkflow("x", doc)[0].check, "no-concurrency-cancel");
 });
 
@@ -140,7 +148,7 @@ test("CHECK_CLASS equals the engine's", () => {
 test("deviation (a): explicit cache: false is not flagged (the engine flags it)", () => {
   const doc = docOf(read("cache-false.yml"));
   const mine = rules.checkWorkflow("f", doc);
-  const ref = reference.checkWorkflow("f", doc);
+  const ref = refWording(reference.checkWorkflow("f", doc));
   assert.equal(ref.length, 6);
   assert.deepEqual(mine.map((f) => f.action), ["actions/setup-java", "ruby/setup-ruby"]);
   assert.deepEqual(mine.map((f) => f.cache_key), ["cache", "bundler-cache"]);
@@ -158,7 +166,7 @@ test("deviation (a): explicit cache: false is not flagged (the engine flags it)"
 
 test("deviation (b): setup-go at v4 or later is not flagged, earlier or unversioned refs still are", () => {
   const mine = rules.checkWorkflow("f", docOf(read("setup-go.yml")));
-  const ref = reference.checkWorkflow("f", docOf(read("setup-go.yml")));
+  const ref = refWording(reference.checkWorkflow("f", docOf(read("setup-go.yml"))));
   assert.deepEqual(ref.map((f) => f.job), ["v3", "v4", "v5", "v5-cache-false", "sha", "bare"]);
   assert.deepEqual(mine.map((f) => f.job), ["v3", "sha", "bare"]);
   const one = (r) => rules.checkWorkflow("f", {jobs: {j: {"timeout-minutes": 1, steps: [{uses: "actions/setup-go@" + r}]}}}).length;
@@ -177,7 +185,7 @@ test("deviation (b): setup-go at v4 or later is not flagged, earlier or unversio
 test("deviation (c): setup-node at v5 or later becomes an observation that mentions packageManager", () => {
   const doc = docOf(read("setup-node.yml"));
   const mine = rules.checkWorkflow("f", doc);
-  const ref = reference.checkWorkflow("f", doc);
+  const ref = refWording(reference.checkWorkflow("f", doc));
   assert.equal(ref.length, 7);
   assert.ok(ref.every((f) => f.severity === "defect"));
   const byJob = Object.fromEntries(mine.map((f) => [f.job, f]));
@@ -274,13 +282,13 @@ test("parity fuzz: 1500 generated workflows (outside the deviations) match the e
     else if (jr < 0.95) doc.jobs = ["a"];
     else doc.jobs = null;
     const mine = rules.checkWorkflow("f.yml", doc);
-    const ref = reference.checkWorkflow("f.yml", doc);
+    const ref = refWording(reference.checkWorkflow("f.yml", doc));
     assert.deepEqual(mine, ref, "case " + n + ": " + JSON.stringify(doc));
     if (mine.length) withFindings++;
   }
   assert.ok(withFindings > 600, "the generator should hit the rules often (" + withFindings + ")");
   for (const bad of [null, undefined, 5, "str", ["a"], true]) {
-    assert.deepEqual(rules.checkWorkflow("f", bad), reference.checkWorkflow("f", bad));
+    assert.deepEqual(rules.checkWorkflow("f", bad), refWording(reference.checkWorkflow("f", bad)));
   }
 });
 
