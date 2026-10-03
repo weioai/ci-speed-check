@@ -1,0 +1,23 @@
+# Shapes a hand-edited file can take; none of them may throw.
+name: odd types
+on:
+  push:
+jobs:
+  null-job:
+  scalar-job: just text
+  list-job: [a, b]
+  steps-not-list:
+    steps: nope
+  mixed-steps:
+    timeout-minutes: 5
+    steps:
+      - just a string
+      - 42
+      - null
+      - uses: 123
+      - uses:
+      - uses: ''
+      - uses: actions/checkout@v4
+        with: not-a-map
+      - uses: actions/setup-node@v4
+        with:

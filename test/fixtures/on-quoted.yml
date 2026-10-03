@@ -1,0 +1,10 @@
+name: quoted on key
+"on":
+  pull_request:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: make

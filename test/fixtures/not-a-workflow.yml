@@ -1,0 +1,7 @@
+# Valid YAML that is not a workflow: no jobs, no triggers.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly

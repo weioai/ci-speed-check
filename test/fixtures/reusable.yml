@@ -1,0 +1,14 @@
+# A job-level `uses` calls a reusable workflow: the timeout rule does not apply to it.
+name: reusable
+on: workflow_dispatch
+jobs:
+  call:
+    uses: some-org/shared/.github/workflows/build.yml@main
+    with:
+      target: all
+  local-call:
+    uses: ./.github/workflows/other.yml
+  plain:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo no timeout here

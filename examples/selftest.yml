@@ -1,0 +1,32 @@
+# Runs the action on its own test fixtures, from a checkout of this repository (the action is `uses: ./`).
+# Copy to .github/workflows/ in the repository that holds the action. The fixtures contain deliberate
+# defects, so this reports findings but never fails (fail-on defaults to none).
+name: CI Speed Check self-test
+on:
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the fixtures
+        id: check
+        uses: ./
+        with:
+          path: test/fixtures
+      - name: Show outputs
+        env:
+          FINDINGS: ${{ steps.check.outputs.findings }}
+          DEFECTS: ${{ steps.check.outputs.defects }}
+          PRO: ${{ steps.check.outputs.pro }}
+          REPORT: ${{ steps.check.outputs.report }}
+        run: |
+          echo "findings=$FINDINGS defects=$DEFECTS pro=$PRO"
+          test -s "$REPORT"

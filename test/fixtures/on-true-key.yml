@@ -1,0 +1,11 @@
+# PyYAML (YAML 1.1) reads a bare `on:` as boolean true; js-yaml keeps the string key "true" for `true:`.
+# The engine falls back to doc["true"], so a `true:` key is treated as the trigger map.
+name: true key
+true:
+  push:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: make

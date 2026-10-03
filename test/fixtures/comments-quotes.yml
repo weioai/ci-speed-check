@@ -1,0 +1,23 @@
+# Leading comment with uses: fake/action@v1 and on: push in it
+name: "comments and quotes"   # trailing comment
+'on':                          # quoted key with a comment
+  push:                        # trigger comment
+    branches: [ main ]
+jobs:
+  "quoted-job":                # job comment
+    runs-on: ubuntu-latest
+    steps:
+      # uses: commented/out@v1
+      - name: "don't count this: uses: not/real@v1"
+        run: |
+          echo "uses: shell/text@v1"
+          echo "on: push"
+      - "uses": "actions/setup-python@v5"      # quoted key and value
+        with:
+          "python-version": "3.12"
+      - uses: 'third/party@v3'    # single-quoted value
+  'other job':
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4

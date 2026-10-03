@@ -1,0 +1,28 @@
+name: explicit cache false
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          cache: false
+      - uses: ruby/setup-ruby@0123456789abcdef0123456789abcdef01234567
+        with:
+          bundler-cache: false
+      - uses: actions/setup-python@v5
+        with:
+          cache: pip
+      - uses: actions/setup-java@v4
+        with:
+          cache: null
+      - uses: ruby/setup-ruby@0123456789abcdef0123456789abcdef01234567

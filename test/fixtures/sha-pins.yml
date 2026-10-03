@@ -1,0 +1,16 @@
+name: sha pins
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: org/lower@0123456789abcdef0123456789abcdef01234567
+      - uses: org/upper@0123456789ABCDEF0123456789ABCDEF01234567
+      - uses: org/mixed@0123456789AbCdEf0123456789aBcDeF01234567
+      - uses: org/short@0123456789abcdef0123456789abcdef0123456
+      - uses: org/long@0123456789abcdef0123456789abcdef012345678
+      - uses: org/nothex@0123456789abcdef0123456789abcdef0123456g
+      - uses: org/branch@main
+      - uses: org/sub/path@v1
+      - uses: org/no-ref

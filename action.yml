@@ -1,0 +1,51 @@
+name: CI Speed Check
+description: Reads your workflow files and flags what makes CI slower than it needs to be. Optional run-history report.
+author: Weio, Inc.
+branding:
+  icon: zap
+  color: green
+inputs:
+  path:
+    description: Folder (searched recursively) or single file holding the workflow files to check, relative to the workspace.
+    required: false
+    default: .github/workflows
+  fail-on:
+    description: "Exit 1 when static findings meet this threshold: none, defect (any defect) or any (any finding). Pro problems never fail the job."
+    required: false
+    default: none
+  annotate:
+    description: "Set to false to skip warning and notice annotations on the workflow files."
+    required: false
+    default: 'true'
+  api-key:
+    description: "Optional Weio API key (wk_...). Enables the Pro run-history report and uses one credit per run. Pass it as a secret."
+    required: false
+    default: ''
+  github-token:
+    description: "Token used only to read this repository's Actions run history from the GitHub API in Pro mode. Needs permissions: actions: read."
+    required: false
+    default: ${{ github.token }}
+  repository:
+    description: "Repository whose run history Pro reads, as owner/name."
+    required: false
+    default: ${{ github.repository }}
+  history-runs:
+    description: "Pro: most recent runs to analyse (1 to 300)."
+    required: false
+    default: '100'
+  history-days:
+    description: "Pro: how many days back to look."
+    required: false
+    default: '30'
+outputs:
+  findings:
+    description: Number of findings (defects and observations) in the checked workflow files.
+  defects:
+    description: Number of findings with severity defect.
+  pro:
+    description: "'true' when the Pro run-history report was produced, otherwise 'false'."
+  report:
+    description: Path of the JSON report, written to RUNNER_TEMP (or the OS temp directory).
+runs:
+  using: node20
+  main: src/index.js

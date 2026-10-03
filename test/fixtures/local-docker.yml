@@ -1,0 +1,11 @@
+name: local and docker actions
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: ./local-action
+      - uses: ./.github/actions/setup
+      - uses: docker://alpine:3.19
+      - uses: docker://ghcr.io/some-org/tool:1.2.3

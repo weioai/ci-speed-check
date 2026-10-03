@@ -1,0 +1,10 @@
+# Known engine quirk kept for parity: a docker:// reference pinned by digest contains "/" and "@" and its
+# ref is not 40 hex characters, so the engine reports it as an unpinned third-party action.
+name: docker digest
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: docker://alpine@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
