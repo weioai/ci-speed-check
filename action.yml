@@ -1,5 +1,5 @@
 name: CI Speed Check
-description: Reads your workflow files and flags what makes CI slower than it needs to be. Optional paid run-history report.
+description: Flags slow, wasteful CI workflow settings on every run. Optional paid run-history report.
 author: Weio, Inc.
 branding:
   icon: zap
